@@ -5,10 +5,8 @@ pub fn build(b: *std.Build) !void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    const android_api_level = b.option([]const u8, "android-api-level", "Android API Level (default: 29)") orelse "29";
-
-    const crypto = try libcrypto(b, target, optimize, android_api_level);
-    const ssl = try libssl(b, target, optimize, android_api_level);
+    const crypto = try libcrypto(b, target, optimize);
+    const ssl = try libssl(b, target, optimize);
 
     crypto.installHeadersDirectory(b.path("include/crypto"), "crypto", .{});
     crypto.installHeadersDirectory(b.path("include/internal"), "internal", .{});
@@ -18,7 +16,7 @@ pub fn build(b: *std.Build) !void {
     b.installArtifact(ssl);
 }
 
-fn libcrypto(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, android_api_level: []const u8) !*std.Build.Step.Compile {
+fn libcrypto(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode) !*std.Build.Step.Compile {
     const lib = b.addLibrary(.{
         .name = "crypto",
         .root_module = b.createModule(.{
@@ -32,8 +30,8 @@ fn libcrypto(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
         else => lib.root_module.strip = true,
     }
 
-    if (target.result.abi == .android or target.result.abi == .androideabi) {
-        try ConfigureAndroidEnvironment(b, lib, target, android_api_level);
+    if (target.result.abi.isAndroid()) {
+        try ConfigureAndroidEnvironment(b, lib, target);
     }
 
     lib.root_module.addIncludePath(b.path("include"));
@@ -897,12 +895,12 @@ fn libcrypto(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
         },
         .flags = cflags,
     });
-    lib.root_module.linkLibrary(try libprovider(b, target, optimize, android_api_level));
-    lib.linkLibC();
+    lib.root_module.linkLibrary(try libprovider(b, target, optimize));
+    lib.root_module.link_libc = true;
     return lib;
 }
 
-fn libssl(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, android_api_level: []const u8) !*std.Build.Step.Compile {
+fn libssl(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode) !*std.Build.Step.Compile {
     const lib = b.addLibrary(.{
         .name = "ssl",
         .root_module = b.createModule(.{
@@ -916,8 +914,8 @@ fn libssl(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin
         else => lib.root_module.strip = true,
     }
 
-    if (target.result.abi == .android or target.result.abi == .androideabi) {
-        try ConfigureAndroidEnvironment(b, lib, target, android_api_level);
+    if (target.result.abi.isAndroid()) {
+        try ConfigureAndroidEnvironment(b, lib, target);
     }
 
     lib.root_module.addIncludePath(b.path("include"));
@@ -1018,11 +1016,11 @@ fn libssl(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin
         },
         .flags = cflags,
     });
-    lib.linkLibC();
+    lib.root_module.link_libc = true;
     return lib;
 }
 
-fn libprovider(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, android_api_level: []const u8) !*std.Build.Step.Compile {
+fn libprovider(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode) !*std.Build.Step.Compile {
     const lib = b.addLibrary(.{
         .name = "providers",
         .root_module = b.createModule(.{
@@ -1031,8 +1029,8 @@ fn libprovider(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.bu
         }),
     });
 
-    if (target.result.abi == .android or target.result.abi == .androideabi) {
-        try ConfigureAndroidEnvironment(b, lib, target, android_api_level);
+    if (target.result.abi.isAndroid()) {
+        try ConfigureAndroidEnvironment(b, lib, target);
     }
 
     lib.root_module.addIncludePath(b.path("include"));
@@ -1274,7 +1272,7 @@ fn libprovider(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.bu
         },
         .flags = cflags,
     });
-    lib.linkLibC();
+    lib.root_module.link_libc = true;
     return lib;
 }
 
@@ -1301,7 +1299,6 @@ const BuildInfo = struct {
 
 const AndroidConfigError = error{
     MissingNdkEnvironment,
-    InvalidNdkPathEncoding,
     UnsupportedHostOperatingSystem,
     UnsupportedHostArchitecture,
     UnsupportedTargetArchitecture,
@@ -1312,41 +1309,33 @@ const AndroidConfigError = error{
     OutOfMemory,
 };
 
-fn ConfigureAndroidEnvironment(b: *std.Build, compile: *std.Build.Step.Compile, target: std.Build.ResolvedTarget, api_level: []const u8) AndroidConfigError!void {
-    const api_level_int = std.fmt.parseInt(u32, api_level, 10) catch {
-        std.log.err("Invalid API level format: '{s}', expected numeric string (e.g., '21')", .{api_level});
-        return AndroidConfigError.InvalidApiLevel;
-    };
+fn ConfigureAndroidEnvironment(b: *std.Build, compile: *std.Build.Step.Compile, target: std.Build.ResolvedTarget) AndroidConfigError!void {
+    const api_level = target.result.os.version_range.linux.android;
+
+    const api_level_str = try std.fmt.allocPrint(b.allocator, "{}", .{api_level});
+    defer b.allocator.free(api_level_str);
 
     const cpu_arch = target.result.cpu.arch;
 
     if (cpu_arch == .riscv64) {
-        if (api_level_int < 35) {
-            std.log.err("RISC-V 64 Android target requires API level 35 or higher (requested: {d}).", .{api_level_int});
+        if (api_level < 35) {
+            std.log.err("RISC-V 64 Android target requires API level 35 or higher (requested: {d}).", .{api_level});
             return AndroidConfigError.InvalidApiLevel;
         }
     }
 
-    if (api_level_int < 24) {
-        std.log.warn("API level {d} is very low, modern NDKs may not support it.", .{api_level_int});
+    if (api_level < 24) {
+        std.log.warn("API level {d} is very low, modern NDKs may not support it.", .{api_level});
     }
 
-    const NDK_ENV_VAR = "ANDROID_NDK_HOME";
+    const ndk_env_var = "ANDROID_NDK_HOME";
 
-    const ndk_home = std.process.getEnvVarOwned(b.allocator, NDK_ENV_VAR) catch |err| switch (err) {
-        error.EnvironmentVariableNotFound => {
-            std.log.err("Environment variable '{s}' not found", .{NDK_ENV_VAR});
-            return AndroidConfigError.MissingNdkEnvironment;
-        },
-        error.InvalidWtf8 => {
-            std.log.err("Environment variable '{s}' contains invalid UTF-8 encoding", .{NDK_ENV_VAR});
-            return AndroidConfigError.InvalidNdkPathEncoding;
-        },
-        error.OutOfMemory => return AndroidConfigError.OutOfMemory,
+    const ndk_home = b.graph.environ_map.get(ndk_env_var) orelse {
+        std.log.err("Environment variable '{s}' not found", .{ndk_env_var});
+        return AndroidConfigError.MissingNdkEnvironment;
     };
-    defer b.allocator.free(ndk_home);
 
-    std.fs.accessAbsolute(ndk_home, .{}) catch {
+    std.Io.Dir.accessAbsolute(b.graph.io, ndk_home, .{}) catch {
         std.log.err("NDK path not accessible: {s}", .{ndk_home});
         return AndroidConfigError.NdkPathNotFound;
     };
@@ -1391,7 +1380,7 @@ fn ConfigureAndroidEnvironment(b: *std.Build, compile: *std.Build.Step.Compile, 
     const sysroot_path = std.fs.path.join(b.allocator, &.{ ndk_home, "toolchains", "llvm", "prebuilt", host_tag, "sysroot" }) catch return AndroidConfigError.OutOfMemory;
     defer b.allocator.free(sysroot_path);
 
-    std.fs.accessAbsolute(sysroot_path, .{}) catch {
+    std.Io.Dir.accessAbsolute(b.graph.io, sysroot_path, .{}) catch {
         std.log.err("Sysroot not found at: {s}", .{sysroot_path});
         std.log.err("Check if your NDK version matches the expected directory structure.", .{});
         return AndroidConfigError.SysrootNotFound;
@@ -1400,7 +1389,7 @@ fn ConfigureAndroidEnvironment(b: *std.Build, compile: *std.Build.Step.Compile, 
     const include_path = std.fs.path.join(b.allocator, &.{ sysroot_path, "usr", "include" }) catch return AndroidConfigError.OutOfMemory;
     defer b.allocator.free(include_path);
 
-    const lib_path = std.fs.path.join(b.allocator, &.{ sysroot_path, "usr", "lib", target_arch, api_level }) catch return AndroidConfigError.OutOfMemory;
+    const lib_path = std.fs.path.join(b.allocator, &.{ sysroot_path, "usr", "lib", target_arch, api_level_str }) catch return AndroidConfigError.OutOfMemory;
     defer b.allocator.free(lib_path);
 
     const system_include_path = std.fs.path.join(b.allocator, &.{ sysroot_path, "usr", "include", target_arch }) catch return AndroidConfigError.OutOfMemory;
@@ -1408,7 +1397,6 @@ fn ConfigureAndroidEnvironment(b: *std.Build, compile: *std.Build.Step.Compile, 
 
     compile.root_module.addSystemIncludePath(.{ .cwd_relative = include_path });
     compile.root_module.addSystemIncludePath(.{ .cwd_relative = system_include_path });
-
     compile.root_module.addLibraryPath(.{ .cwd_relative = lib_path });
 
     var writer = std.Io.Writer.Allocating.init(b.allocator);

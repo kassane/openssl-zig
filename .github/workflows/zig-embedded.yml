@@ -13,15 +13,14 @@ jobs:
           - target: riscv64-linux-musl
           - target: powerpc64-linux
           - target: aarch64-windows
-          # Android targets (requires NDK)
           - target: aarch64-linux-android
-            android_api: "28"
+            android_api: "29"
           - target: arm-linux-androideabi
-            android_api: "28"
+            android_api: "29"
           - target: x86_64-linux-android
-            android_api: "28"
+            android_api: "29"
           - target: x86-linux-android
-            android_api: "28"
+            android_api: "29"
           - target: riscv64-linux-android
             android_api: "35"
 
@@ -31,8 +30,8 @@ jobs:
         with:
           fetch-depth: 0
       - uses: mlugg/setup-zig@v2
-#        with:
-#          version: master
+        with:
+          version: 0.16.0
 
       - name: Setup Android NDK
         if: contains(matrix.target, 'android')
@@ -48,7 +47,7 @@ jobs:
         run: |
           ARGS="-Dtarget=${{ matrix.target }}"
           if [ -n "${{ matrix.android_api }}" ]; then
-            ARGS="$ARGS -Dandroid-api-level=${{ matrix.android_api }}"
+            ARGS="$ARGS.${{ matrix.android_api }}"
           fi
           zig build --summary all -freference-trace $ARGS
       - name: Build Summary - Zig Package ${{ matrix.target }}
