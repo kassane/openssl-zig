@@ -1,4 +1,4 @@
-Welcome to the OpenSSL Project (Forked to zig-pkg support v0.15.2)
+Welcome to the OpenSSL Project (Forked to zig-pkg support v0.16.0)
 ==============================
 
 [![openssl logo]][www.openssl.org]
